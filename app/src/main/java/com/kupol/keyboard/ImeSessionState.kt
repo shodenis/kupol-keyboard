@@ -26,40 +26,34 @@ class ImeSessionState {
             RU -> "ru-RU"
             ZH -> "zh-CN"
         }
-    }
 
-    /** Язык перевода (цель). */
-    enum class TargetLanguage {
-        RU,
-        EN,
-        ZH,
-        ;
-
-        fun next(): TargetLanguage = when (this) {
-            RU -> EN
-            EN -> ZH
-            ZH -> RU
+        fun toTargetLanguage(): TargetLanguage = when (this) {
+            EN -> TargetLanguage.EN
+            RU -> TargetLanguage.RU
+            ZH -> TargetLanguage.ZH
         }
     }
+
+    /** Язык перевода (цель) всегда синхронизирован с языком раскладки. */
+    enum class TargetLanguage { RU, EN, ZH }
 
     enum class ShiftMode { OFF, ON, CAPS_LOCK }
 
     var inputLanguage: InputLanguage = InputLanguage.EN
+        private set
+
+    var targetLanguage: TargetLanguage = inputLanguage.toTargetLanguage()
+        private set
 
     fun cycleInputLanguage(): InputLanguage {
         inputLanguage = inputLanguage.next()
+        targetLanguage = inputLanguage.toTargetLanguage()
         shiftMode = ShiftMode.OFF
         return inputLanguage
     }
 
-    var targetLanguage: TargetLanguage = TargetLanguage.ZH
-
-    fun cycleTargetLanguage(): TargetLanguage {
-        targetLanguage = targetLanguage.next()
-        return targetLanguage
-    }
-
     var shiftMode: ShiftMode = ShiftMode.OFF
+        private set
 
     fun toggleShift() {
         shiftMode = when (shiftMode) {

@@ -1,8 +1,12 @@
 package com.kupol.keyboard
 
+import android.Manifest
 import android.app.Activity
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
@@ -64,5 +68,11 @@ class SettingsActivity : Activity() {
         }
 
         setContentView(layout)
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
+        }
     }
 }

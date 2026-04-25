@@ -1,43 +1,32 @@
 package com.kupol.keyboard
 
 /**
- * Все возможные действия клавиатуры.
- * Sealed class — исчерпывающий when без else в [MyKeyboardService].
+ * Действия клавиатуры (исчерпывающий when в [MyKeyboardService]).
  */
 sealed class KeyAction {
 
-    // ─── Ввод текста ────────────────────────────────────────────
-
-    /** Обычный символ (буква, цифра, знак) */
     data class TypeChar(val char: String) : KeyAction()
 
-    /** Удалить последний символ (буфер → поле) */
     object Delete : KeyAction()
 
-    /** Пробел */
     object Space : KeyAction()
 
-    /** Enter / подтвердить */
     object Enter : KeyAction()
 
-    // ─── Модификаторы ───────────────────────────────────────────
-
-    /** Shift / Caps Lock */
     object Shift : KeyAction()
 
-    // ─── Языки ──────────────────────────────────────────────────
-
-    /** Переключить язык раскладки: EN ↔ RU */
+    /** Смена языка ввода / раскладки (поле не трогаем). */
     object CycleInputLanguage : KeyAction()
 
-    /** Переключить язык перевода (долгий тап на ⟳) */
+    /** Смена языка перевода (поле не трогаем). */
     object CycleTargetLanguage : KeyAction()
 
-    // ─── Основные действия ──────────────────────────────────────
+    /** Перевести весь текст в поле и заменить результатом. */
+    object TranslateWholeField : KeyAction()
 
-    /** Вставить composing-буфер как есть (▶ Вставить) */
-    object Insert : KeyAction()
+    /** Распознавание речи → вставка как есть (локаль раскладки). */
+    object MicPlain : KeyAction()
 
-    /** Перевести и вставить (⟳) */
-    object Translate : KeyAction()
+    /** Распознавание → перевод на target → вставка. */
+    object MicTranslate : KeyAction()
 }

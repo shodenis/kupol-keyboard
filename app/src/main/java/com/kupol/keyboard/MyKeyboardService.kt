@@ -53,9 +53,11 @@ class MyKeyboardService : InputMethodService() {
         sessionState.startNewSession()
     }
 
-    override fun onDestroyInputView() {
-        super.onDestroyInputView()
-        keyboardView = null
+    override fun onFinishInputView(finishingInput: Boolean) {
+        super.onFinishInputView(finishingInput)
+        if (finishingInput) {
+            keyboardView = null
+        }
     }
 
     override fun onDestroy() {
@@ -69,10 +71,10 @@ class MyKeyboardService : InputMethodService() {
                 currentInputConnection?.commitText(action.char, 1)
             }
             is KeyAction.Backspace -> {
-                sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
+                sendKeyEventDownUp(KeyEvent.KEYCODE_DEL)
             }
             is KeyAction.Enter -> {
-                sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)
+                sendKeyEventDownUp(KeyEvent.KEYCODE_ENTER)
             }
             is KeyAction.Translate -> {
                 performTranslation()
@@ -134,7 +136,7 @@ class MyKeyboardService : InputMethodService() {
         }
     }
 
-    private fun sendDownUpKeyEvents(keyCode: Int) {
+    private fun sendKeyEventDownUp(keyCode: Int) {
         currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
         currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
     }

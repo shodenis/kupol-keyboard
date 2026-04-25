@@ -4,28 +4,28 @@ import android.inputmethodservice.InputMethodService
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
-import android.widget.Toast
+import android.view.inputmethod.InputConnection
 import com.kupol.keyboard.translation.TranslationManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * IME-сервис: [KeyboardView] → [KeyAction] → [InputConnection];
- * перевод: [TranslationManager] (внутри — [com.kupol.keyboard.storage.KeyStorage] и провайдеры).
+ * IME: [KeyboardView] → [KeyAction] → буфер / [InputConnection];
+ * перевод: [TranslationManager] + [KeyStorage].
  */
 class MyKeyboardService : InputMethodService() {
 
+    private val sessionState = ImeSessionState()
     private var keyboardView: KeyboardView? = null
     private lateinit var translationManager: TranslationManager
 
-    /** Состояние сессии: язык цели перевода, счётчики; клавиатура пока без переключателей. */
-    private val sessionState = ImeSessionState()
-
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
+    private var translationJob: Job? = null
 
     private var currentEditorInfo: EditorInfo? = null
 
@@ -35,10 +35,8 @@ class MyKeyboardService : InputMethodService() {
     }
 
     override fun onCreateInputView(): View {
-        return KeyboardView(this).apply {
-            onKeyActionListener = { action ->
-                handleAction(action)
-            }
+        return KeyboardView(this, sessionState) { action ->
+            handleKeyAction(action)
         }.also { keyboardView = it }
     }
 
@@ -51,10 +49,24 @@ class MyKeyboardService : InputMethodService() {
         super.onStartInputView(info, restarting)
         currentEditorInfo = info
         sessionState.startNewSession()
+        if (info != null) {
+            val inputType = info.inputType and EditorInfo.TYPE_MASK_VARIATION
+            val isPasswordField =
+                inputType == EditorInfo.TYPE_TEXT_VARIATION_PASSWORD ||
+                    inputType == EditorInfo.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
+                    inputType == EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+                    inputType == EditorInfo.TYPE_NUMBER_VARIATION_PASSWORD
+            keyboardView?.setTranslateEnabled(!isPasswordField)
+        } else {
+            keyboardView?.setTranslateEnabled(true)
+        }
+        keyboardView?.updateState()
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
+        translationJob?.cancel()
+        sessionState.setTranslating(false)
         if (finishingInput) {
             keyboardView = null
         }
@@ -65,79 +77,158 @@ class MyKeyboardService : InputMethodService() {
         super.onDestroy()
     }
 
-    private fun handleAction(action: KeyAction) {
+    // ─── Обработка действий клавиатуры ─────────────────────────
+
+    private fun handleKeyAction(action: KeyAction) {
+        val ic = currentInputConnection
+        if (ic == null) {
+            if (action is KeyAction.Translate) {
+                keyboardView?.showMessage("Нет соединения с полем ввода")
+            }
+            return
+        }
+
         when (action) {
-            is KeyAction.Character -> {
-                currentInputConnection?.commitText(action.char, 1)
+            is KeyAction.TypeChar -> handleTypeChar(ic, action.char)
+            is KeyAction.Delete -> handleDelete(ic)
+            is KeyAction.Space -> handleSpace(ic)
+            is KeyAction.Enter -> handleEnter(ic)
+            is KeyAction.Shift -> sessionState.toggleShift()
+            is KeyAction.CycleInputLanguage -> handleLanguageSwitch(ic)
+            is KeyAction.CycleTargetLanguage -> {
+                sessionState.cycleTargetLanguage()
             }
-            is KeyAction.Backspace -> {
-                sendKeyEventDownUp(KeyEvent.KEYCODE_DEL)
-            }
-            is KeyAction.Enter -> {
-                sendKeyEventDownUp(KeyEvent.KEYCODE_ENTER)
-            }
+            is KeyAction.Insert -> handleInsert(ic)
             is KeyAction.Translate -> {
-                performTranslation()
-            }
-        }
-    }
-
-    private fun performTranslation() {
-        val ic = currentInputConnection ?: return
-
-        val inputType = (currentEditorInfo?.inputType ?: 0) and EditorInfo.TYPE_MASK_VARIATION
-        val isPasswordField =
-            inputType == EditorInfo.TYPE_TEXT_VARIATION_PASSWORD ||
-                inputType == EditorInfo.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
-                inputType == EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
-                inputType == EditorInfo.TYPE_NUMBER_VARIATION_PASSWORD
-        if (isPasswordField) {
-            Toast.makeText(this, "Перевод недоступен в поле пароля", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val originalText = ic.getTextBeforeCursor(100, 0)?.toString()?.trim().orEmpty()
-
-        if (originalText.isEmpty()) {
-            Toast.makeText(this, "Nothing to translate", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        Toast.makeText(this, "Translating...", Toast.LENGTH_SHORT).show()
-
-        serviceScope.launch {
-            try {
-                val result = withContext(Dispatchers.IO) {
-                    translationManager.translate(
-                        text = originalText,
-                        targetLanguage = sessionState.targetLanguage,
-                    )
+                if (isPasswordContext()) {
+                    keyboardView?.showMessage("Перевод недоступен в поле пароля")
+                } else {
+                    handleTranslate(ic)
                 }
-
-                result.fold(
-                    onSuccess = { translatedText ->
-                        val conn = currentInputConnection ?: return@fold
-                        conn.deleteSurroundingText(originalText.length, 0)
-                        conn.commitText(translatedText, 1)
-                        Toast.makeText(this@MyKeyboardService, "Translated!", Toast.LENGTH_SHORT).show()
-                    },
-                    onFailure = {
-                        Toast.makeText(
-                            this@MyKeyboardService,
-                            "Translation failed: ${it.message ?: "API Error"}",
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                    },
-                )
-            } catch (e: Exception) {
-                e.printStackTrace()
-                Toast.makeText(this@MyKeyboardService, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
             }
+        }
+        keyboardView?.updateState()
+    }
+
+    private fun isPasswordContext(): Boolean {
+        val inputType = (currentEditorInfo?.inputType ?: 0) and EditorInfo.TYPE_MASK_VARIATION
+        return inputType == EditorInfo.TYPE_TEXT_VARIATION_PASSWORD ||
+            inputType == EditorInfo.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
+            inputType == EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+            inputType == EditorInfo.TYPE_NUMBER_VARIATION_PASSWORD
+    }
+
+    private fun handleTypeChar(_ic: InputConnection, char: String) {
+        val output = if (sessionState.isUppercase) char.uppercase() else char.lowercase()
+        sessionState.appendChar(output)
+        sessionState.resetShiftAfterKey()
+    }
+
+    private fun handleDelete(ic: InputConnection) {
+        if (!sessionState.deleteLastChar()) {
+            ic.deleteSurroundingText(1, 0)
         }
     }
 
-    private fun sendKeyEventDownUp(keyCode: Int) {
-        currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
-        currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+    private fun handleSpace(ic: InputConnection) {
+        if (sessionState.isBufferEmpty) {
+            ic.commitText(" ", 1)
+        } else {
+            ic.commitText(sessionState.composingText + " ", 1)
+            sessionState.clearBuffer()
+        }
+    }
+
+    private fun handleEnter(ic: InputConnection) {
+        if (!sessionState.isBufferEmpty) {
+            ic.commitText(sessionState.composingText, 1)
+            sessionState.clearBuffer()
+        }
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+    }
+
+    private fun handleLanguageSwitch(ic: InputConnection) {
+        if (!sessionState.isBufferEmpty) {
+            ic.commitText(sessionState.composingText, 1)
+            sessionState.clearBuffer()
+        }
+        sessionState.cycleInputLanguage()
+        sessionState.shiftMode = ImeSessionState.ShiftMode.OFF
+    }
+
+    private fun handleInsert(ic: InputConnection) {
+        if (sessionState.isBufferEmpty) return
+        ic.commitText(sessionState.composingText, 1)
+        sessionState.clearBuffer()
+    }
+
+    private fun handleTranslate(ic: InputConnection) {
+        if (sessionState.isTranslating) return
+
+        val selectedText = ic.getSelectedText(0)?.toString()
+        val textToTranslate = when {
+            !selectedText.isNullOrEmpty() -> selectedText
+            !sessionState.isBufferEmpty -> sessionState.composingText
+            else -> {
+                val before = ic.getTextBeforeCursor(2000, 0)?.toString().orEmpty()
+                val trimmed = before.trimEnd()
+                if (trimmed.isNotEmpty()) trimmed
+                else {
+                    keyboardView?.showMessage("Выделите текст, наберите в буфере или вставьте текст")
+                    return
+                }
+            }
+        }
+
+        if (textToTranslate.length > 500) {
+            keyboardView?.showMessage("Текст слишком длинный (макс. 500 символов)")
+            return
+        }
+
+        val capturedSessionId = sessionState.activeSessionId
+        val targetLanguage = sessionState.targetLanguage
+        val hadSelection = !selectedText.isNullOrEmpty()
+
+        sessionState.setTranslating(true)
+        keyboardView?.updateState()
+
+        translationJob = serviceScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                translationManager.translate(
+                    text = textToTranslate,
+                    targetLanguage = targetLanguage,
+                )
+            }
+
+            if (!sessionState.isSessionValid(capturedSessionId) || currentInputConnection == null) {
+                sessionState.setTranslating(false)
+                keyboardView?.updateState()
+                return@launch
+            }
+            sessionState.setTranslating(false)
+            val conn = currentInputConnection ?: return@launch
+
+            result.fold(
+                onSuccess = { translatedText ->
+                    if (hadSelection) {
+                        conn.commitText(translatedText, 1)
+                    } else if (!sessionState.isBufferEmpty) {
+                        conn.commitText(translatedText, 1)
+                        sessionState.clearBuffer()
+                    } else {
+                        val del = textToTranslate.length
+                        if (del > 0) {
+                            conn.deleteSurroundingText(del, 0)
+                        }
+                        conn.commitText(translatedText, 1)
+                    }
+                },
+                onFailure = { e ->
+                    keyboardView?.showMessage(e.message ?: "Ошибка перевода")
+                },
+            )
+            keyboardView?.updateState()
+        }
     }
 }

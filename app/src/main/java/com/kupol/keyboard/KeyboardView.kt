@@ -45,6 +45,21 @@ class KeyboardView(
     private val colorText = Color.parseColor("#202124")
     private val colorTextOnAction = Color.parseColor("#FFFFFF")
 
+    // Должны быть объявлены до init: updateState() → rebuildKeys() читает раскладки
+    private val layoutEn = arrayOf(
+        arrayOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p"),
+        arrayOf("a", "s", "d", "f", "g", "h", "j", "k", "l"),
+        arrayOf("z", "x", "c", "v", "b", "n", "m"),
+    )
+
+    private val layoutRu = arrayOf(
+        arrayOf("й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х"),
+        arrayOf("ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э"),
+        arrayOf("я", "ч", "с", "м", "и", "т", "ь", "б", "ю"),
+    )
+
+    private val numberRow = arrayOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0")
+
     init {
         orientation = VERTICAL
         setBackgroundColor(colorBg)
@@ -171,22 +186,6 @@ class KeyboardView(
         }
     }
 
-    // ─── Раскладки ──────────────────────────────────────────────
-
-    private val layoutEn = arrayOf(
-        arrayOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p"),
-        arrayOf("a", "s", "d", "f", "g", "h", "j", "k", "l"),
-        arrayOf("z", "x", "c", "v", "b", "n", "m"),
-    )
-
-    private val layoutRu = arrayOf(
-        arrayOf("й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х"),
-        arrayOf("ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э"),
-        arrayOf("я", "ч", "с", "м", "и", "т", "ь", "б", "ю"),
-    )
-
-    private val numberRow = arrayOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0")
-
     private fun rebuildKeys() {
         keysContainer.removeAllViews()
 
@@ -234,6 +233,7 @@ class KeyboardView(
         val row = LinearLayout(context).apply {
             orientation = HORIZONTAL
         }
+        if (keys.isEmpty()) return row
         for (key in keys) {
             val button = makeKeyButton(key).apply {
                 setOnClickListener { onAction(KeyAction.TypeChar(key)) }
